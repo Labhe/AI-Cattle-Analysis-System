@@ -16,8 +16,29 @@ document.addEventListener('DOMContentLoaded', () => {
     const previewName = document.getElementById('previewName');
     const removeBtn = document.getElementById('removeBtn');
     const newAnalysisBtn = document.getElementById('newAnalysisBtn');
+    const themeToggle = document.getElementById('themeToggle');
 
     let selectedFile = null;
+
+    // ═══════════════════════════════════════════════
+    //  DARK / LIGHT MODE
+    // ═══════════════════════════════════════════════
+
+    const applyTheme = (theme) => {
+        document.documentElement.setAttribute('data-theme', theme);
+        try { localStorage.setItem('cattle-theme', theme); } catch (e) { /* ignore */ }
+    };
+    const savedTheme = (() => {
+        try { return localStorage.getItem('cattle-theme'); } catch (e) { return null; }
+    })();
+    applyTheme(savedTheme || 'dark');
+
+    if (themeToggle) {
+        themeToggle.addEventListener('click', () => {
+            const current = document.documentElement.getAttribute('data-theme') || 'dark';
+            applyTheme(current === 'dark' ? 'light' : 'dark');
+        });
+    }
 
     // ═══════════════════════════════════════════════
     //  FILE HANDLING
@@ -107,7 +128,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await response.json();
 
             if (response.ok && data.success) {
-                renderResults(data.results, data.annotated_image);
+                renderResults(data.results, data.annotated_image, data.report_files || {});
                 uploadSection.classList.add('hidden');
                 resultsSection.classList.remove('hidden');
                 window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -127,7 +148,7 @@ document.addEventListener('DOMContentLoaded', () => {
     //  RENDER RESULTS
     // ═══════════════════════════════════════════════
 
-    function renderResults(res, annotatedImage) {
+    function renderResults(res, annotatedImage, reportFiles) {
         // ── Annotated Image ──
         document.getElementById('resultImage').src = `/outputs/${annotatedImage}?t=${Date.now()}`;
 
@@ -135,6 +156,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const detConf = res.confidence || (res.detection && res.detection.confidence) || 0;
         document.getElementById('detConfFill').style.width = `${detConf}%`;
         document.getElementById('detConfValue').textContent = `${detConf}%`;
+
+        // ── Segmentation Info ──
+        renderSegmentation(res.segmentation);
+
+        // ── Download Report Buttons ──
+        renderDownloadButtons(reportFiles || {});
 
         // ── Species ──
         document.getElementById('resSpecies').textContent = res.species || 'Unknown';
@@ -162,12 +189,27 @@ document.addEventListener('DOMContentLoaded', () => {
             weightMethod === 'ml_regressor' ? 'ML-based estimation' :
             weightMethod === 'breed_average' ? 'Breed average estimation' : '';
 
+        // ── Weight Prediction Interval ──
+        const interval = res.weight_interval_kg;
+        const intervalEl = document.getElementById('resWeightInterval');
+        if (interval && interval.length === 2) {
+            intervalEl.textContent = `95% interval: ${interval[0]}–${interval[1]} kg`;
+        } else {
+            intervalEl.textContent = '';
+        }
+
         // ── BCS ──
         const bcs = res.bcs || res.xgb_bcs || 3.0;
         document.getElementById('resBcs').textContent = bcs.toFixed(1);
         const bcsPercent = ((bcs - 1) / 4) * 100;
         document.getElementById('bcsMarker').style.left = `${bcsPercent}%`;
         document.getElementById('resBcsDesc').textContent = getBCSDescription(bcs);
+
+        // ── BCS Uncertainty ──
+        const bcsUnc = res.bcs_uncertainty;
+        const bcsUncEl = document.getElementById('resBcsUncertainty');
+        bcsUncEl.textContent = (bcsUnc !== undefined && bcsUnc !== null)
+            ? `± ${Number(bcsUnc).toFixed(2)} uncertainty` : '';
 
         // Set BCS color
         const bcsEl = document.getElementById('resBcs');
@@ -177,22 +219,20 @@ document.addEventListener('DOMContentLoaded', () => {
         else if (bcs <= 4) bcsEl.style.color = '#f59e0b';
         else bcsEl.style.color = '#ef4444';
 
-        // ── Taxonomy ──
-        if (res.taxonomy) {
-            document.getElementById('taxKingdom').textContent = res.taxonomy.kingdom || 'Animalia';
-            document.getElementById('taxPhylum').textContent = res.taxonomy.phylum || 'Chordata';
-            document.getElementById('taxClass').textContent = res.taxonomy.class || 'Mammalia';
-            document.getElementById('taxOrder').textContent = res.taxonomy.order || '—';
-            document.getElementById('taxFamily').textContent = res.taxonomy.family || '—';
-            document.getElementById('taxSpecies').textContent = res.taxonomy.scientific_name || '—';
-        } else {
-            document.getElementById('taxKingdom').textContent = 'Animalia';
-            document.getElementById('taxPhylum').textContent = 'Chordata';
-            document.getElementById('taxClass').textContent = 'Mammalia';
-            document.getElementById('taxOrder').textContent = res.order || '—';
-            document.getElementById('taxFamily').textContent = res.family || '—';
-            document.getElementById('taxSpecies').textContent = res.scientific_name || '—';
-        }
+        // ── Taxonomy Tree ──
+        const tax = res.taxonomy || {};
+        const profile = res.scientific_profile || {};
+        document.getElementById('taxKingdom').textContent = tax.kingdom || profile.kingdom || 'Animalia';
+        document.getElementById('taxPhylum').textContent = tax.phylum || profile.phylum || 'Chordata';
+        document.getElementById('taxClass').textContent = tax.class || profile.class || 'Mammalia';
+        document.getElementById('taxOrder').textContent = tax.order || profile.order || '—';
+        document.getElementById('taxFamily').textContent = tax.family || profile.family || '—';
+        document.getElementById('taxGenus').textContent = profile.genus || '—';
+        document.getElementById('taxSpecies').textContent =
+            tax.scientific_name || profile.scientific_name || res.scientific_name || '—';
+
+        // ── Scientific Information Card ──
+        renderScientificInfo(profile);
 
         // ── Breed Info Card ──
         renderBreedInfo(res.breed_info);
@@ -202,6 +242,71 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // ── Image Quality Warning ──
         renderQualityWarning(res.image_quality);
+    }
+
+    function renderSegmentation(seg) {
+        const methodEl = document.getElementById('segMethod');
+        const partsEl = document.getElementById('segParts');
+        if (!seg || !seg.method || seg.method === 'none') {
+            methodEl.textContent = 'Segmentation: n/a';
+            partsEl.textContent = '';
+            return;
+        }
+        const conf = seg.confidence ? ` (${seg.confidence}%)` : '';
+        methodEl.textContent = `Segmentation: ${seg.method}${conf}`;
+        partsEl.textContent = (seg.parts && seg.parts.length)
+            ? `Parts: ${seg.parts.join(', ')}` : '';
+    }
+
+    function renderDownloadButtons(reportFiles) {
+        const jsonBtn = document.getElementById('downloadJsonBtn');
+        const pdfBtn = document.getElementById('downloadPdfBtn');
+        const wire = (btn, filename) => {
+            if (filename) {
+                btn.href = `/reports/${filename}`;
+                btn.classList.remove('hidden');
+            } else {
+                btn.classList.add('hidden');
+            }
+        };
+        wire(jsonBtn, reportFiles.json);
+        wire(pdfBtn, reportFiles.pdf);
+    }
+
+    function renderScientificInfo(profile) {
+        const card = document.getElementById('cardScientific');
+        const grid = document.getElementById('scientificGrid');
+        if (!profile || Object.keys(profile).length === 0) {
+            card.classList.add('hidden');
+            return;
+        }
+        card.classList.remove('hidden');
+        grid.innerHTML = '';
+
+        const fmtRange = (v) => Array.isArray(v) ? (v.length ? `${v[0]}–${v[1]}` : '') : v;
+        const fields = [
+            { label: 'Scientific Name', value: profile.scientific_name, italic: true },
+            { label: 'Origin Country', value: profile.origin_country },
+            { label: 'Native Region', value: profile.native_region },
+            { label: 'Purpose', value: profile.purpose },
+            { label: 'Avg Weight', value: profile.average_weight_kg ? `${profile.average_weight_kg} kg` : null },
+            { label: 'Avg Height', value: profile.average_height_cm ? `${profile.average_height_cm} cm` : null },
+            { label: 'Avg Milk Yield', value: profile.average_milk_yield_lpy ? `${profile.average_milk_yield_lpy} L/yr` : null },
+            { label: 'Temperament', value: profile.temperament },
+            { label: 'Climate Adaptation', value: profile.climate_adaptation },
+            { label: 'Color Pattern', value: Array.isArray(profile.color_pattern) ? profile.color_pattern.join(', ') : profile.color_pattern },
+            { label: 'Lifespan', value: fmtRange(profile.lifespan_years) ? `${fmtRange(profile.lifespan_years)} yrs` : null },
+        ];
+        fields.forEach((f) => {
+            if (!f.value || f.value === 'Unknown') return;
+            const item = document.createElement('div');
+            item.className = 'scientific-item';
+            item.innerHTML = `
+                <span class="scientific-label">${f.label}</span>
+                <span class="scientific-value${f.italic ? ' italic' : ''}">${f.value}</span>
+            `;
+            grid.appendChild(item);
+        });
     }
 
     // ═══════════════════════════════════════════════
@@ -278,12 +383,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!measurements) return;
 
         const items = [
-            { label: 'Body Area', value: measurements.body_area_px, unit: 'px²' },
-            { label: 'Perimeter', value: measurements.body_perimeter_px, unit: 'px' },
             { label: 'Body Length', value: measurements.body_length_px, unit: 'px', decimals: 0 },
-            { label: 'Body Height', value: measurements.body_height_px, unit: 'px', decimals: 0 },
+            { label: 'Shoulder Height', value: measurements.shoulder_height_px, unit: 'px', decimals: 0 },
+            { label: 'Chest Width', value: measurements.chest_width_px, unit: 'px', decimals: 0 },
+            { label: 'Heart Girth', value: measurements.heart_girth_px, unit: 'px', decimals: 0 },
+            { label: 'Body Area', value: measurements.body_area_px, unit: 'px²', decimals: 0 },
             { label: 'Aspect Ratio', value: measurements.aspect_ratio, unit: '', decimals: 2 },
-            { label: 'Solidity', value: measurements.solidity, unit: '', decimals: 3 },
         ];
 
         items.forEach((m) => {

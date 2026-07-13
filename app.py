@@ -66,11 +66,27 @@ def upload_file():
             if result_dict and "error" in result_dict:
                 return jsonify({"error": result_dict["error"]}), 400
 
+            # Render downloadable reports (JSON + PDF) when available.
+            report_files = {}
+            if getattr(pipeline, "report_generator", None) is not None:
+                try:
+                    stem = Path(unique_filename).stem
+                    rendered = pipeline.report_generator.generate(
+                        result_dict, formats=("json", "pdf"),
+                        detection_image=annotated_image_path, basename=stem)
+                    report_files = {
+                        fmt: Path(path).name
+                        for fmt, path in rendered["paths"].items() if path
+                    }
+                except Exception:  # noqa: BLE001 — reporting is best-effort
+                    report_files = {}
+
             # Return comprehensive response
             return jsonify({
                 "success": True,
                 "results": result_dict,
                 "annotated_image": Path(annotated_image_path).name,
+                "report_files": report_files,
             })
 
         except Exception as e:
@@ -85,6 +101,13 @@ def upload_file():
 def get_output_image(filename):
     """Serve annotated output images."""
     return send_from_directory(Path("outputs/inference"), filename)
+
+
+@app.route("/reports/<filename>")
+def get_report(filename):
+    """Serve generated report files (JSON / PDF) as downloads."""
+    return send_from_directory(Path("outputs/reports"), secure_filename(filename),
+                               as_attachment=True)
 
 
 @app.route("/api/breeds")
