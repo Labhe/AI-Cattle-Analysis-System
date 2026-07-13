@@ -126,17 +126,32 @@ species_classifier:
 breed_classifier:
   model_name: "convnext_tiny"       # Options: efficientnet_v2_s, convnext_tiny, swin_t
   weights: "checkpoints/breed_classifier_best.pth"
+  last_checkpoint: "checkpoints/breed_classifier_last.pth"
+  classes_file: "checkpoints/breed_classes.json"   # Written by the trainer
   image_size: 224
   num_classes: 20                    # Number of cattle breeds
   top_k: 5
+  min_confidence: 0.3
+  supported_species:                 # Breed prediction only runs for these
+    - "Cow"
+    - "Bull"
+    - "Ox"
+    - "Cattle"
   training:
     epochs: 60
     patience: 10
     batch_size: 32
     lr: 0.0005
+    min_lr: 0.00001
+    optimizer: "adamw"              # Options: adamw, adam, sgd
+    scheduler: "cosine"             # Options: cosine, step, plateau, none
     weight_decay: 0.00005
     label_smoothing: 0.1
     dropout: 0.4
+    mixup_alpha: 0.2                # > 0 enables MixUp (dataset/augmentation.py)
+    mixed_precision: true           # AMP on CUDA
+    workers: 4
+    seed: 42
     architectures_to_compare:
       - "efficientnet_v2_s"
       - "convnext_tiny"
