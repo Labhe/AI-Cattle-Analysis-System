@@ -40,8 +40,11 @@ species:
 # ─── Detection Model ───
 detection:
   model_name: "yolo11m"             # Options: yolo11m, yolo11l, rtdetr-l
+  model_family: "yolo11"            # Falls back to yolov8 if YOLO11 is unsupported
+  model_size: "m"                   # One of: n, s, m, l
   pretrained_weights: "yolo11m.pt"
   fine_tuned_weights: "checkpoints/detector_best.pt"
+  last_checkpoint: "checkpoints/detector_last.pt"
   confidence_threshold: 0.4
   iou_threshold: 0.5
   image_size: 640
@@ -64,6 +67,8 @@ detection:
     scale: 0.5
     perspective: 0.0005
     multi_scale: true
+    workers: 4
+    seed: 42
 
 # ─── Segmentation Model ───
 segmentation:
