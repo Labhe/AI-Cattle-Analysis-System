@@ -1,4 +1,5 @@
 import os
+import yaml
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -19,10 +20,20 @@ BASE_DIR = Path(__file__).parent.parent
 PROCESSED_DIR = BASE_DIR / "data" / "processed"
 CHECKPOINTS_DIR = BASE_DIR / "checkpoints"
 OUTPUTS_DIR = BASE_DIR / "outputs"
+CONFIG_PATH = BASE_DIR / "configs" / "model_config.yaml"
 METRICS_CSV = OUTPUTS_DIR / "cnn_regression_results.csv"
 
 CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _load_bcs_training_config() -> dict:
+    """Read the bcs_regressor.training block from the master config."""
+    if CONFIG_PATH.exists():
+        with open(CONFIG_PATH, "r") as f:
+            config = yaml.safe_load(f) or {}
+        return config.get("bcs_regressor", {}).get("training", {})
+    return {}
 
 class EfficientNetRegressor(nn.Module):
     def __init__(self):
@@ -105,28 +116,39 @@ def main():
     val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False, num_workers=4)
     test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False, num_workers=4)
     
+    train_cfg = _load_bcs_training_config()
+    epochs = int(train_cfg.get("cnn_epochs", 60))
+    lr = float(train_cfg.get("lr", 1e-3))
+    patience = int(train_cfg.get("patience", 10))
+
     model = EfficientNetRegressor().to(device)
     criterion = nn.MSELoss()
-    optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)    
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=60)
-    
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+
     best_loss = float('inf')
-    epochs = 60
-    
+    epochs_no_improve = 0
+
     print("Starting CNN Regression Training...")
-    # Fast mock epoch for logic
-    for epoch in range(1): # usually 'epochs'
+    for epoch in range(epochs):
         train_loss = train(model, train_loader, optimizer, criterion, device)
         val_loss, _, _ = validate(model, val_loader, criterion, device)
         scheduler.step()
-        
+
         print(f"Epoch {epoch+1}/{epochs} | T-Loss: {train_loss:.4f} | V-Loss: {val_loss:.4f}")
-        
+
         if val_loss < best_loss:
             best_loss = val_loss
+            epochs_no_improve = 0
             torch.save(model.state_dict(), CHECKPOINTS_DIR / "cnn_regression_best.pth")
             print("Saved best CNN model.")
-            
+        else:
+            epochs_no_improve += 1
+        torch.save(model.state_dict(), CHECKPOINTS_DIR / "cnn_regression_last.pth")
+        if epochs_no_improve >= patience:
+            print(f"Early stopping after {patience} epochs without improvement.")
+            break
+
     print("Evaluating on Test Set...")
     model.load_state_dict(torch.load(CHECKPOINTS_DIR / "cnn_regression_best.pth"))
     test_loss, test_preds, test_targets = validate(model, test_loader, criterion, device)

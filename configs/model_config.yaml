@@ -162,6 +162,16 @@ weight_regressor:
   model_type: "xgboost"             # Best performer selected automatically
   weights: "checkpoints/weight_regressor_best.pkl"
   input_features: 20                # Morphometric features
+  # Body measurements (from the segmentation mask) used as regressor inputs.
+  measurement_features:
+    - "body_length"
+    - "shoulder_height"
+    - "chest_width"
+    - "heart_girth"
+    - "body_area"
+    - "heart_girth_sq_length"
+  min_weight_kg: 50                  # Clamp bounds for predicted weight
+  max_weight_kg: 1500
   training:
     regressors_to_compare:
       - "xgboost"
@@ -169,6 +179,8 @@ weight_regressor:
       - "lightgbm"
       - "random_forest"
     cv_folds: 5
+    val_fraction: 0.2
+    seed: 42
     xgboost:
       n_estimators: 200
       max_depth: 8
@@ -181,6 +193,9 @@ weight_regressor:
       n_estimators: 200
       max_depth: 8
       learning_rate: 0.05
+    random_forest:
+      n_estimators: 200
+      max_depth: null
 
 # ─── BCS Regressor ───
 bcs_regressor:
