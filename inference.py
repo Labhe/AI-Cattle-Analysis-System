@@ -38,7 +38,12 @@ from models.breed_classifier import (
     DEFAULT_BREED_CLASSES,
     BreedPredictor,
 )
-from utils.feature_extraction import extract_features_from_mask
+from utils.feature_extraction import (
+    extract_features_from_mask,
+    extract_body_measurements,
+    BODY_MEASUREMENT_NAMES,
+)
+from models.regression import WeightRegressor
 from services.image_quality import assess_image_quality
 from services.explainability import create_segmentation_overlay
 from database import (
@@ -212,16 +217,21 @@ class CattleAnalysisPipeline:
             print("  [!] No breed classifier found — using knowledge-based estimation")
 
     def _load_weight_regressor(self):
-        """Load weight estimation model."""
+        """Load weight estimation model (Phase 7 WeightRegressor or legacy pickle)."""
         self.has_weight_reg = False
+        self.weight_regressor = None
         weight_path = CHECKPOINTS_DIR / "weight_regressor_best.pkl"
         if not weight_path.exists():
             weight_path = CHECKPOINTS_DIR / "xgb_best.pkl"
-        
+
         if weight_path.exists():
-            print("  [✓] Loading weight regressor")
-            self.weight_regressor = joblib.load(weight_path)
-            self.has_weight_reg = True
+            try:
+                self.weight_regressor = WeightRegressor.load(weight_path)
+                print("  [✓] Loading weight regressor "
+                      f"({self.weight_regressor.best_model_name or 'model'})")
+                self.has_weight_reg = True
+            except Exception as e:  # noqa: BLE001 — fall back to heuristics
+                print(f"  [!] Failed to load weight regressor: {e}")
         else:
             print("  [!] No weight regressor found — using breed-average estimation")
 
@@ -613,36 +623,37 @@ class CattleAnalysisPipeline:
         }
 
     def _extract_features(self, mask: np.ndarray) -> Dict[str, float]:
-        """Stage 6: Morphometric feature extraction from segmentation mask."""
-        return extract_features_from_mask(mask)
+        """Stage 6: Morphometric + body-measurement extraction from the mask."""
+        features = extract_features_from_mask(mask)
+        features.update(extract_body_measurements(mask))
+        return features
 
     def _estimate_weight(
         self, features: Dict, species: str, breed_result: Dict
     ) -> Dict[str, Any]:
-        """Stage 7: Weight estimation."""
-        feature_cols = [
-            'area', 'perimeter', 'bbox_length', 'bbox_width', 'aspect_ratio',
-            'solidity', 'extent', 'equivalent_diameter', 'compactness',
-            'convex_area', 'major_axis_length', 'minor_axis_length',
-        ]
-        feat_vector = np.array([[features.get(k, 0) for k in feature_cols]])
-        
-        if self.has_weight_reg:
+        """Stage 7: Weight estimation from body measurements (with interval)."""
+        reg_cfg = self.config.get("weight_regressor", {})
+        min_w = reg_cfg.get("min_weight_kg", 50)
+        max_w = reg_cfg.get("max_weight_kg", 1500)
+
+        if self.has_weight_reg and self.weight_regressor is not None \
+                and self.weight_regressor.feature_names:
             try:
-                prediction = self.weight_regressor.predict(feat_vector)
-                if hasattr(prediction, 'shape') and prediction.shape[-1] >= 2:
-                    weight = float(prediction[0][0])
-                else:
-                    weight = float(prediction[0])
-                
+                feat_vector = np.array([[features.get(k, 0.0)
+                                         for k in self.weight_regressor.feature_names]])
+                result = self.weight_regressor.predict_with_interval(feat_vector)
+                weight = max(min_w, min(max_w, result["weight_kg"]))
                 return {
-                    "weight_kg": round(max(50, min(1500, weight)), 1),
-                    "confidence": 75.0,
+                    "weight_kg": round(weight, 1),
+                    "confidence": result["confidence"],
+                    "interval": result["interval"],
+                    "interval_kg": result["interval_kg"],
                     "method": "ml_regressor",
+                    "model": result["model"],
                 }
             except Exception:
                 pass
-        
+
         # Fallback: use species average from database
         avg_weight = get_species_average_weight(species)
         
@@ -846,18 +857,20 @@ class CattleAnalysisPipeline:
             "weight_kg": weight_result["weight_kg"],
             "weight_confidence": weight_result["confidence"],
             "weight_method": weight_result["method"],
+            "weight_interval_kg": weight_result.get("interval"),
             
             # ── BCS ──
             "bcs": bcs_result["bcs"],
             "bcs_confidence": bcs_result["confidence"],
             "bcs_method": bcs_result["method"],
             
-            # ── Body Measurements (from features) ──
+            # ── Body Measurements (from segmentation mask) ──
             "measurements": {
-                "body_area_px": features.get("area", 0),
-                "body_perimeter_px": features.get("perimeter", 0),
-                "body_length_px": features.get("major_axis_length", 0),
-                "body_height_px": features.get("minor_axis_length", 0),
+                "body_length_px": round(features.get("body_length", 0), 1),
+                "shoulder_height_px": round(features.get("shoulder_height", 0), 1),
+                "chest_width_px": round(features.get("chest_width", 0), 1),
+                "heart_girth_px": round(features.get("heart_girth", 0), 1),
+                "body_area_px": round(features.get("body_area", features.get("area", 0)), 1),
                 "aspect_ratio": round(features.get("aspect_ratio", 0), 2),
                 "solidity": round(features.get("solidity", 0), 3),
                 "compactness": round(features.get("compactness", 0), 3),

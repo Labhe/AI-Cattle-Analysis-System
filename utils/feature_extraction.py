@@ -1,4 +1,6 @@
 import os
+from typing import Dict
+
 import cv2
 import numpy as np
 import pandas as pd
@@ -12,6 +14,105 @@ OUTPUTS_DIR = BASE_DIR / "outputs"
 FEATURES_CSV = OUTPUTS_DIR / "features.csv"
 
 OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+
+# Canonical body-measurement feature names used by the weight regressor
+# (Phase 7). Measurements are in pixel units of the segmentation mask; with
+# consistent ROI framing they correlate with live body weight, and the
+# classic heart-girth formula (girth² × length) is added as a derived term.
+BODY_MEASUREMENT_NAMES = [
+    "body_length", "shoulder_height", "chest_width", "heart_girth", "body_area",
+]
+
+
+def extract_body_measurements(mask: np.ndarray) -> Dict[str, float]:
+    """
+    Extract cattle body measurements from a binary segmentation mask.
+
+    Derives, in pixel units:
+      - ``body_length``     : horizontal extent of the animal silhouette
+      - ``shoulder_height`` : vertical extent of the front (shoulder) region
+      - ``chest_width``     : vertical thickness at the chest/heart-girth column
+      - ``heart_girth``     : elliptical circumference estimate around the chest
+      - ``body_area``       : visible body area (mask pixel count)
+      - ``heart_girth_sq_length`` : girth² × length (Schaeffer-style predictor)
+
+    The front (head) end is taken as the side whose silhouette reaches higher,
+    matching the geometry used by the Phase 4 body-part estimation.
+
+    Args:
+        mask: (H, W) or (H, W, 1) binary mask, uint8 {0, 255} or boolean.
+
+    Returns:
+        Dict of measurement name -> float. All zeros if the mask is empty.
+    """
+    zero = {name: 0.0 for name in BODY_MEASUREMENT_NAMES}
+    zero["heart_girth_sq_length"] = 0.0
+
+    if mask is None:
+        return zero
+    if mask.ndim == 3:
+        mask = mask.squeeze()
+    binary = (np.asarray(mask) > 0).astype(np.uint8)
+    if binary.sum() == 0:
+        return zero
+
+    ys, xs = np.nonzero(binary)
+    x0, x1 = int(xs.min()), int(xs.max())
+    y0, y1 = int(ys.min()), int(ys.max())
+    body_length = float(x1 - x0 + 1)
+    body_area = float(binary.sum())
+
+    # Per-column vertical thickness (rows filled) and top row per column.
+    col_thickness = binary.sum(axis=0).astype(float)
+    filled_cols = np.nonzero(col_thickness)[0]
+
+    # Head end = side whose silhouette reaches higher (smaller top-row index).
+    width = max(x1 - x0, 1)
+    end_w = max(int(0.22 * width), 1)
+    left_band = binary[:, x0:x0 + end_w]
+    right_band = binary[:, max(x1 - end_w + 1, 0):x1 + 1]
+    left_top = np.nonzero(left_band.any(axis=1))[0]
+    right_top = np.nonzero(right_band.any(axis=1))[0]
+    head_on_left = (left_top.min() if left_top.size else y1) <= \
+                   (right_top.min() if right_top.size else y1)
+
+    # Shoulder height: vertical extent in the front (shoulder) band.
+    if head_on_left:
+        shoulder_cols = binary[:, x0:x0 + end_w]
+    else:
+        shoulder_cols = binary[:, max(x1 - end_w + 1, 0):x1 + 1]
+    shoulder_rows = np.nonzero(shoulder_cols.any(axis=1))[0]
+    shoulder_height = float(shoulder_rows.max() - shoulder_rows.min() + 1) \
+        if shoulder_rows.size else float(y1 - y0 + 1)
+
+    # Chest column: just behind the shoulder (~1/3 from the head end).
+    if head_on_left:
+        chest_x = min(x0 + int(0.33 * width), binary.shape[1] - 1)
+    else:
+        chest_x = max(x1 - int(0.33 * width), 0)
+    chest_width = float(col_thickness[chest_x])
+    if chest_width == 0 and filled_cols.size:  # fall back to the nearest filled column
+        nearest = filled_cols[np.argmin(np.abs(filled_cols - chest_x))]
+        chest_width = float(col_thickness[nearest])
+
+    # Heart girth: circumference of the ellipse whose axes are the chest
+    # depth (vertical) and an estimated lateral width (~0.6 of the depth,
+    # a standard cattle body cross-section ratio). Ramanujan approximation.
+    a = chest_width / 2.0
+    b = a * 0.6
+    if a > 0 and b > 0:
+        heart_girth = float(np.pi * (3 * (a + b) - np.sqrt((3 * a + b) * (a + 3 * b))))
+    else:
+        heart_girth = 0.0
+
+    return {
+        "body_length": body_length,
+        "shoulder_height": shoulder_height,
+        "chest_width": chest_width,
+        "heart_girth": heart_girth,
+        "body_area": body_area,
+        "heart_girth_sq_length": float(heart_girth ** 2 * body_length),
+    }
 
 def extract_features_from_mask(mask, target_size=(640, 640)):
     """
