@@ -63,19 +63,26 @@ def regression_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, floa
     }
 
 
-def build_tree_regressors(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def build_tree_regressors(config: Optional[Dict[str, Any]] = None,
+                          regressors: Optional[List[str]] = None) -> Dict[str, Any]:
     """
     Instantiate the tree-based regressors named in the config, skipping any
     whose library is not installed.
 
     Supports ``xgboost``, ``catboost``, ``lightgbm``, and ``random_forest``.
     Hyperparameters are read from ``weight_regressor.training.<name>`` when
-    present. Returns an ordered mapping of display name -> estimator.
+    present (shared by both regressors). Returns an ordered mapping of display
+    name -> estimator.
+
+    Args:
+        config: Parsed ``model_config.yaml`` dict.
+        regressors: Explicit list of regressor names to build; overrides the
+            config's ``regressors_to_compare``.
     """
     config = config or {}
     train_cfg = config.get("weight_regressor", {}).get("training", {})
-    wanted = train_cfg.get("regressors_to_compare",
-                           ["xgboost", "catboost", "lightgbm", "random_forest"])
+    wanted = regressors or train_cfg.get(
+        "regressors_to_compare", ["xgboost", "catboost", "lightgbm", "random_forest"])
     seed = int(train_cfg.get("seed", 42))
     regressors: Dict[str, Any] = {}
 
@@ -250,6 +257,174 @@ class WeightRegressor:
                 metrics=payload.get("metrics", {}),
                 residual_std=payload.get("residual_std", 0.0),
                 r2=payload.get("r2", 0.0),
+            )
+        # Backward compatibility: a bare estimator pickle (legacy checkpoints).
+        reg = cls(feature_names=[])
+        reg.model = payload
+        reg.best_model_name = type(payload).__name__
+        return reg
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  Body Condition Score regressor (Phase 8)
+# ════════════════════════════════════════════════════════════════════════
+
+# Standard 9-point BCS scale (1–5 in 0.5 steps).
+BCS_SCALE = [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
+
+
+def snap_to_bcs(value: float, scale: Optional[List[float]] = None) -> float:
+    """Snap a continuous prediction to the nearest BCS grid point."""
+    scale = scale or BCS_SCALE
+    lo, hi = scale[0], scale[-1]
+    value = max(lo, min(hi, float(value)))
+    return float(min(scale, key=lambda s: abs(s - value)))
+
+
+@dataclass
+class BCSRegressor:
+    """
+    Body Condition Score regressor (Phase 8).
+
+    Predicts BCS on the 1–5 scale (0.5 steps) from morphometric / body
+    measurement features. Trains and compares the same tree regressors as
+    :class:`WeightRegressor`, selects the best by validation RMSE, and returns
+    a snapped BCS with a confidence score and prediction uncertainty.
+
+    Attributes:
+        feature_names: Ordered feature names the model expects.
+        model: The selected fitted estimator.
+        best_model_name: Display name of the selected model.
+        metrics: Per-model validation metric dicts.
+        residual_std: Std of validation residuals (drives uncertainty).
+        r2: Validation R² of the selected model (drives the confidence score).
+        scale: The BCS grid the raw prediction is snapped to.
+    """
+
+    feature_names: List[str]
+    model: Optional[Any] = None
+    best_model_name: Optional[str] = None
+    metrics: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    residual_std: float = 0.0
+    r2: float = 0.0
+    scale: List[float] = field(default_factory=lambda: list(BCS_SCALE))
+
+    def fit(self, X: np.ndarray, y: np.ndarray, config: Optional[Dict[str, Any]] = None,
+            val_fraction: float = 0.2, seed: int = 42) -> "BCSRegressor":
+        """
+        Train and compare candidate regressors; keep the best (lowest RMSE).
+
+        Args:
+            X: Feature matrix (N, F) aligned with :attr:`feature_names`.
+            y: BCS targets (N,) on the 1–5 scale.
+            config: Parsed ``model_config.yaml`` dict for hyperparameters.
+            val_fraction: Held-out fraction for model selection.
+            seed: RNG seed for the split.
+
+        Raises:
+            ValueError: If there are too few samples or no candidate models.
+        """
+        X = np.asarray(X, dtype=float)
+        y = np.asarray(y, dtype=float).ravel()
+        if len(X) < 5:
+            raise ValueError(f"Need at least 5 samples to train, got {len(X)}")
+
+        # Reuse the shared tree-regressor factory; the candidate list comes
+        # from bcs_regressor.regressors_to_compare when present.
+        bcs_regressors = (config or {}).get("bcs_regressor", {}).get("regressors_to_compare")
+        candidates = build_tree_regressors(config, regressors=bcs_regressors)
+        if not candidates:
+            raise ValueError("No regression candidates available (check installed libraries)")
+
+        rng = np.random.default_rng(seed)
+        idx = rng.permutation(len(X))
+        n_val = max(1, int(len(X) * val_fraction))
+        val_idx, train_idx = idx[:n_val], idx[n_val:]
+        X_tr, y_tr, X_val, y_val = X[train_idx], y[train_idx], X[val_idx], y[val_idx]
+
+        best_rmse = float("inf")
+        for name, estimator in candidates.items():
+            estimator.fit(X_tr, y_tr)
+            preds = estimator.predict(X_val)
+            m = regression_metrics(y_val, preds)
+            self.metrics[name] = m
+            if m["rmse"] < best_rmse:
+                best_rmse = m["rmse"]
+                self.model = estimator
+                self.best_model_name = name
+                residuals = y_val - preds
+                self.residual_std = float(np.std(residuals)) if len(residuals) > 1 else best_rmse
+                self.r2 = m["r2"] if not np.isnan(m["r2"]) else 0.0
+
+        self.model.fit(X, y)
+        return self
+
+    def predict(self, X: np.ndarray, snap: bool = True) -> np.ndarray:
+        """Predict BCS for a feature matrix; snapped to the grid by default."""
+        if self.model is None:
+            raise RuntimeError("BCSRegressor is not fitted")
+        raw = np.asarray(self.model.predict(np.asarray(X, dtype=float)), dtype=float)
+        if snap:
+            return np.array([snap_to_bcs(v, self.scale) for v in raw])
+        return raw
+
+    def predict_with_uncertainty(self, X: np.ndarray) -> Dict[str, Any]:
+        """
+        Predict BCS with a confidence score and prediction uncertainty for a
+        single sample.
+
+        Returns:
+            Dict with ``bcs`` (snapped), ``bcs_raw`` (continuous),
+            ``confidence`` (0–100), ``uncertainty`` (residual std, BCS units),
+            and ``model``.
+        """
+        X = np.atleast_2d(np.asarray(X, dtype=float))
+        raw = float(self.model.predict(X)[0])
+        bcs = snap_to_bcs(raw, self.scale)
+        # Confidence blends fit quality (R²) with residual tightness relative
+        # to one BCS step, and rewards raw predictions near a grid point.
+        step = self.scale[1] - self.scale[0] if len(self.scale) > 1 else 0.5
+        tightness = max(0.0, 1.0 - (self.residual_std / step)) if step else 0.0
+        snap_bonus = max(0.0, 1.0 - abs(raw - bcs) / (step / 2 + 1e-6))
+        confidence = max(0.0, min(100.0, 100.0 * (0.5 * max(self.r2, 0.0)
+                                                   + 0.3 * tightness + 0.2 * snap_bonus)))
+        return {
+            "bcs": bcs,
+            "bcs_raw": round(raw, 3),
+            "confidence": round(confidence, 1),
+            "uncertainty": round(self.residual_std, 3),
+            "model": self.best_model_name,
+        }
+
+    def save(self, path: "os.PathLike") -> Path:
+        """Persist the full regressor (model + metadata) via joblib."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump({
+            "kind": "bcs",
+            "feature_names": self.feature_names,
+            "model": self.model,
+            "best_model_name": self.best_model_name,
+            "metrics": self.metrics,
+            "residual_std": self.residual_std,
+            "r2": self.r2,
+            "scale": self.scale,
+        }, path)
+        return path
+
+    @classmethod
+    def load(cls, path: "os.PathLike") -> "BCSRegressor":
+        """Load a regressor previously written by :meth:`save`."""
+        payload = joblib.load(path)
+        if isinstance(payload, dict) and "feature_names" in payload:
+            return cls(
+                feature_names=payload["feature_names"],
+                model=payload.get("model"),
+                best_model_name=payload.get("best_model_name"),
+                metrics=payload.get("metrics", {}),
+                residual_std=payload.get("residual_std", 0.0),
+                r2=payload.get("r2", 0.0),
+                scale=payload.get("scale", list(BCS_SCALE)),
             )
         # Backward compatibility: a bare estimator pickle (legacy checkpoints).
         reg = cls(feature_names=[])
