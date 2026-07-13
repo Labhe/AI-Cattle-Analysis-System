@@ -75,6 +75,34 @@ COCO_TO_LIVESTOCK = {
 }
 
 
+def to_json_safe(obj: Any) -> Any:
+    """
+    Recursively convert NumPy scalars/arrays to native Python types so the
+    result is safe for ``json``/Flask ``jsonify``.
+
+    OpenCV and NumPy operations (and ``round()`` on ``np.float64``) leave
+    ``np.int64`` / ``np.float64`` values throughout the pipeline result; these
+    are not JSON-serializable. This normalizes dicts, lists, tuples, numpy
+    scalars, arrays, and non-finite floats.
+    """
+    if isinstance(obj, dict):
+        return {k: to_json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [to_json_safe(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return to_json_safe(obj.tolist())
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        value = float(obj)
+        return value if np.isfinite(value) else None
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, float):
+        return obj if np.isfinite(obj) else None
+    return obj
+
+
 def _load_config() -> Dict:
     """Load model configuration."""
     config_path = CONFIGS_DIR / "model_config.yaml"
@@ -961,8 +989,9 @@ class CattleAnalysisPipeline:
         # Fill weight_range from breed info
         if breed_info:
             result["weight_range"] = breed_info.get("weight_range", "")
-        
-        return result
+
+        # Normalize NumPy scalar/array types so the result is JSON-serializable.
+        return to_json_safe(result)
 
     def _save_results(self, result: Dict[str, Any]):
         """Append results to CSV."""

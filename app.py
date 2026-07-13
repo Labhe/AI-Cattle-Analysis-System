@@ -6,14 +6,43 @@ image upload, analysis, and report generation.
 """
 
 import os
+import math
 import uuid
 import json
 from pathlib import Path
+import numpy as np
 from flask import Flask, request, jsonify, render_template, send_from_directory
+from flask.json.provider import DefaultJSONProvider
 from werkzeug.utils import secure_filename
-from inference import CattleAnalysisPipeline
+from inference import CattleAnalysisPipeline, to_json_safe
+
+
+class NumpyJSONProvider(DefaultJSONProvider):
+    """
+    Flask JSON provider that serializes NumPy scalar/array types.
+
+    The analysis pipeline leaves NumPy values (notably ``np.int64`` from
+    OpenCV/detection ops, which — unlike ``np.float64`` — is not a Python int
+    and is not JSON-serializable) throughout the result. Handling them here
+    makes every ``jsonify`` response numpy-safe, regardless of source.
+    """
+
+    @staticmethod
+    def default(obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            value = float(obj)
+            return value if math.isfinite(value) else None
+        if isinstance(obj, np.bool_):
+            return bool(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return DefaultJSONProvider.default(obj)
+
 
 app = Flask(__name__)
+app.json = NumpyJSONProvider(app)
 
 # Initialize pipeline once to avoid reloading models on every request
 print("\n" + "=" * 60)
@@ -81,13 +110,14 @@ def upload_file():
                 except Exception:  # noqa: BLE001 — reporting is best-effort
                     report_files = {}
 
-            # Return comprehensive response
-            return jsonify({
+            # Return comprehensive response. to_json_safe guards against any
+            # residual NumPy scalar/array types that Flask cannot serialize.
+            return jsonify(to_json_safe({
                 "success": True,
                 "results": result_dict,
                 "annotated_image": Path(annotated_image_path).name,
                 "report_files": report_files,
-            })
+            }))
 
         except Exception as e:
             import traceback
