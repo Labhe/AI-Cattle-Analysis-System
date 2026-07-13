@@ -18,6 +18,7 @@ runs/
 logs/
 outputs/
 checkpoints/
+catboost_info/
 
 # Model Weights
 *.pt
