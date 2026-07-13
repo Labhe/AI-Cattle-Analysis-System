@@ -205,11 +205,27 @@ bcs_regressor:
   tree_weights: "checkpoints/bcs_tree_best.pkl"
   scale: [1.0, 5.0]
   step: 0.5
+  # Features (morphometric + body measurements) used by the tree BCS regressor.
+  features:
+    - "solidity"
+    - "extent"
+    - "compactness"
+    - "aspect_ratio"
+    - "chest_width"
+    - "heart_girth"
+    - "body_area"
+  regressors_to_compare:
+    - "xgboost"
+    - "catboost"
+    - "lightgbm"
+    - "random_forest"
   training:
     cnn_epochs: 50
     patience: 10
     batch_size: 16
     lr: 0.0005
+    val_fraction: 0.2
+    seed: 42
 
 # ─── Image Quality ───
 image_quality:
