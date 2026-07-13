@@ -30,6 +30,10 @@
                 <div class="header-badges">
                     <span class="badge badge-ai">Deep Learning</span>
                     <span class="badge badge-version">v2.0</span>
+                    <button type="button" class="theme-toggle" id="themeToggle" title="Toggle light / dark mode" aria-label="Toggle theme">
+                        <span class="theme-icon-dark">🌙</span>
+                        <span class="theme-icon-light">☀️</span>
+                    </button>
                 </div>
             </div>
         </header>
@@ -113,6 +117,10 @@
                             </div>
                             <span class="confidence-value" id="detConfValue">—</span>
                         </div>
+                        <div class="segmentation-info" id="segmentationInfo">
+                            <span class="seg-chip" id="segMethod">Segmentation: —</span>
+                            <span class="seg-chip" id="segParts"></span>
+                        </div>
                     </div>
 
                     <!-- RIGHT: Analysis Cards -->
@@ -161,6 +169,7 @@
                                     <span class="weight-value" id="resWeight">—</span>
                                     <span class="weight-unit">kg</span>
                                 </div>
+                                <div class="weight-interval" id="resWeightInterval"></div>
                                 <div class="weight-range" id="resWeightRange">—</div>
                                 <div class="weight-method" id="resWeightMethod">—</div>
                             </div>
@@ -186,6 +195,7 @@
                                     </div>
                                     <span class="bcs-value" id="resBcs">—</span>
                                 </div>
+                                <div class="bcs-uncertainty" id="resBcsUncertainty"></div>
                                 <div class="bcs-description" id="resBcsDesc">—</div>
                             </div>
                         </div>
@@ -197,13 +207,27 @@
                                 <h3>Scientific Classification</h3>
                             </div>
                             <div class="card-body">
-                                <div class="taxonomy-grid">
-                                    <div class="tax-row"><span class="tax-label">Kingdom</span><span class="tax-value" id="taxKingdom">—</span></div>
-                                    <div class="tax-row"><span class="tax-label">Phylum</span><span class="tax-value" id="taxPhylum">—</span></div>
-                                    <div class="tax-row"><span class="tax-label">Class</span><span class="tax-value" id="taxClass">—</span></div>
-                                    <div class="tax-row"><span class="tax-label">Order</span><span class="tax-value" id="taxOrder">—</span></div>
-                                    <div class="tax-row"><span class="tax-label">Family</span><span class="tax-value" id="taxFamily">—</span></div>
-                                    <div class="tax-row"><span class="tax-label">Species</span><span class="tax-value tax-species" id="taxSpecies">—</span></div>
+                                <div class="taxonomy-tree">
+                                    <div class="tax-node" style="--depth:0"><span class="tax-rank">Kingdom</span><span class="tax-value" id="taxKingdom">—</span></div>
+                                    <div class="tax-node" style="--depth:1"><span class="tax-rank">Phylum</span><span class="tax-value" id="taxPhylum">—</span></div>
+                                    <div class="tax-node" style="--depth:2"><span class="tax-rank">Class</span><span class="tax-value" id="taxClass">—</span></div>
+                                    <div class="tax-node" style="--depth:3"><span class="tax-rank">Order</span><span class="tax-value" id="taxOrder">—</span></div>
+                                    <div class="tax-node" style="--depth:4"><span class="tax-rank">Family</span><span class="tax-value" id="taxFamily">—</span></div>
+                                    <div class="tax-node" style="--depth:5"><span class="tax-rank">Genus</span><span class="tax-value" id="taxGenus">—</span></div>
+                                    <div class="tax-node" style="--depth:6"><span class="tax-rank">Species</span><span class="tax-value tax-species" id="taxSpecies">—</span></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Scientific Information Card -->
+                        <div class="info-card glass-card card-scientific hidden" id="cardScientific">
+                            <div class="card-header">
+                                <span class="card-icon">📚</span>
+                                <h3>Scientific Information</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="scientific-grid" id="scientificGrid">
+                                    <!-- Filled by JS -->
                                 </div>
                             </div>
                         </div>
@@ -243,6 +267,14 @@
                     <button class="btn btn-secondary" id="newAnalysisBtn">
                         ← New Analysis
                     </button>
+                    <div class="download-group" id="downloadGroup">
+                        <a class="btn btn-download hidden" id="downloadJsonBtn" href="#" download>
+                            <span class="btn-icon-file">⬇</span> Download JSON
+                        </a>
+                        <a class="btn btn-download hidden" id="downloadPdfBtn" href="#" download>
+                            <span class="btn-icon-file">📄</span> Download PDF Report
+                        </a>
+                    </div>
                 </div>
             </section>
         </main>
