@@ -99,18 +99,28 @@ segmentation:
 
 # ─── Species Classifier ───
 species_classifier:
-  model_name: "efficientnet_v2_s"
+  model_name: "efficientnet_v2_s"   # Options: efficientnet_v2_s, convnext_tiny, swin_t
   weights: "checkpoints/species_classifier_best.pth"
+  last_checkpoint: "checkpoints/species_classifier_last.pth"
   image_size: 224
   num_classes: 12
+  top_k: 5
+  min_confidence: 0.5               # Below this, fall back to the detector's species
   training:
     epochs: 50
     patience: 10
     batch_size: 32
     lr: 0.001
+    min_lr: 0.00001
+    optimizer: "adamw"              # Options: adamw, adam, sgd
+    scheduler: "cosine"             # Options: cosine, step, plateau, none
     weight_decay: 0.0001
     label_smoothing: 0.1
     dropout: 0.3
+    mixup_alpha: 0.0                # > 0 enables MixUp (dataset/augmentation.py)
+    mixed_precision: true           # AMP on CUDA
+    workers: 4
+    seed: 42
 
 # ─── Breed Classifier ───
 breed_classifier:

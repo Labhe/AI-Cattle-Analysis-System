@@ -31,7 +31,7 @@ from ultralytics import YOLO
 
 # Internal modules
 from models.segmentation import UNetResNet34, LivestockSegmentor
-from models.species_classifier import SpeciesClassifier, SPECIES_CLASSES
+from models.species_classifier import SpeciesClassifier, SPECIES_CLASSES, SpeciesPredictor
 from models.breed_classifier import (
     build_breed_classifier,
     predict_breed_top_k,
@@ -180,14 +180,15 @@ class CattleAnalysisPipeline:
         self.has_species_clf = False
         species_path = CHECKPOINTS_DIR / "species_classifier_best.pth"
         if species_path.exists():
-            print("  [✓] Loading species classifier")
-            num_classes = self.config.get("species_classifier", {}).get("num_classes", 12)
-            self.species_clf = SpeciesClassifier(num_classes=num_classes, pretrained=False).to(self.device)
-            self.species_clf.load_state_dict(
-                torch.load(species_path, map_location=self.device, weights_only=True)
-            )
-            self.species_clf.eval()
-            self.has_species_clf = True
+            try:
+                self.species_predictor = SpeciesPredictor(
+                    config=self.config, weights=species_path, device=str(self.device)
+                )
+                print("  [✓] Loading species classifier "
+                      f"({self.species_predictor.architecture})")
+                self.has_species_clf = True
+            except (RuntimeError, ValueError, FileNotFoundError) as e:
+                print(f"  [!] Failed to load species classifier: {e}")
         else:
             print("  [!] No species classifier found — using detector class only")
 
@@ -262,15 +263,15 @@ class CattleAnalysisPipeline:
 
         # ── Stage 2: Detection ──
         det_result = self._detect(img_rgb)
-        
-        # ── Stage 3: Species Classification ──
         roi = det_result["roi"]
-        species_result = self._classify_species(roi, det_result["species"])
-        species = species_result["species"]
 
-        # ── Stage 4: Segmentation ──
+        # ── Stage 3: Segmentation ──
         seg_result = self._segment(roi)
         mask = seg_result["mask"]
+
+        # ── Stage 4: Species Classification (after detection + segmentation) ──
+        species_result = self._classify_species(roi, det_result["species"])
+        species = species_result["species"]
 
         # ── Stage 5: Breed Classification ──
         breed_result = self._classify_breed(roi, species)
@@ -423,28 +424,30 @@ class CattleAnalysisPipeline:
         return best_livestock or best_any_animal
 
     def _classify_species(self, roi: np.ndarray, detector_species: str) -> Dict[str, Any]:
-        """Stage 3: Species classification."""
+        """Stage 4: Species classification (after detection + segmentation)."""
         if self.has_species_clf and roi.size > 0:
-            roi_tensor = self.transform(roi).unsqueeze(0).to(self.device)
-            predictions = self.species_clf.predict_top_k(roi_tensor, k=3)
-            
-            top_species = predictions[0][0]
-            top_confidence = predictions[0][1]
-            
-            # If species classifier is confident, use its prediction
-            # Otherwise, use detector's species
-            if top_confidence > 0.5:
+            try:
+                pred = self.species_predictor.predict(roi)
+            except (ValueError, RuntimeError) as e:
+                print(f"  Species classification failed: {e}")
+                pred = None
+
+            # If the species classifier is confident, use its prediction;
+            # otherwise fall back to the detector's species.
+            if pred is not None and pred["confidence"] >= self.species_predictor.min_confidence:
                 return {
-                    "species": top_species,
-                    "confidence": top_confidence,
-                    "top_3": predictions,
+                    "species": pred["species"],
+                    "confidence": pred["confidence"],
+                    "top_3": pred["top_k"][:3],
+                    "top_5": pred["top_k"][:5],
                     "method": "classifier",
                 }
-        
+
         return {
             "species": detector_species,
             "confidence": 0.0,
             "top_3": [(detector_species, 1.0)],
+            "top_5": [(detector_species, 1.0)],
             "method": "detector",
         }
 
@@ -801,6 +804,10 @@ class CattleAnalysisPipeline:
             "species_top_3": [
                 {"species": s, "confidence": round(c * 100, 1)}
                 for s, c in species_result["top_3"]
+            ],
+            "species_top_5": [
+                {"species": s, "confidence": round(c * 100, 1)}
+                for s, c in species_result.get("top_5", species_result["top_3"])
             ],
             
             # ── Taxonomy ──
