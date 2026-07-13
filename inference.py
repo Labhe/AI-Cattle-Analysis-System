@@ -43,7 +43,8 @@ from utils.feature_extraction import (
     extract_body_measurements,
     BODY_MEASUREMENT_NAMES,
 )
-from models.regression import WeightRegressor
+from models.regression import WeightRegressor, BCSRegressor
+from services.report_generator import ReportGenerator
 from services.image_quality import assess_image_quality
 from services.explainability import create_segmentation_overlay
 from database import (
@@ -117,7 +118,8 @@ class CattleAnalysisPipeline:
         self._load_breed_classifier()
         self._load_weight_regressor()
         self._load_bcs_model()
-        
+        self._init_report_generator()
+
         print("=" * 60)
         print("  All models loaded. System ready for analysis.")
         print("=" * 60)
@@ -238,15 +240,27 @@ class CattleAnalysisPipeline:
             print("  [!] No weight regressor found — using breed-average estimation")
 
     def _load_bcs_model(self):
-        """Load BCS estimation model."""
+        """Load BCS estimation model (Phase 8 BCSRegressor or legacy pickle)."""
         self.has_bcs = False
+        self.bcs_regressor = None
         bcs_path = CHECKPOINTS_DIR / "bcs_tree_best.pkl"
         if bcs_path.exists():
-            print("  [✓] Loading BCS regressor")
-            self.bcs_regressor = joblib.load(bcs_path)
-            self.has_bcs = True
+            try:
+                self.bcs_regressor = BCSRegressor.load(bcs_path)
+                print("  [✓] Loading BCS regressor "
+                      f"({self.bcs_regressor.best_model_name or 'model'})")
+                self.has_bcs = True
+            except Exception as e:  # noqa: BLE001 — fall back to morphometric
+                print(f"  [!] Failed to load BCS regressor: {e}")
         else:
             print("  [!] No BCS model found — using morphometric estimation")
+
+    def _init_report_generator(self):
+        """Initialize the professional report generator (Phase 10)."""
+        try:
+            self.report_generator = ReportGenerator(config=self.config)
+        except Exception:  # noqa: BLE001 — reporting is optional
+            self.report_generator = None
 
     # ════════════════════════════════════════════════════════════════
     #  MAIN ANALYSIS METHOD
@@ -318,11 +332,64 @@ class CattleAnalysisPipeline:
             breed_result, weight_result, bcs_result,
             features, taxonomy, breed_info, seg_result
         )
+        result["annotated_image"] = str(annotated_path)
+
+        # ── Stage 11: Professional Report Generation ──
+        result["report"] = self._generate_report(result, annotated_path, seg_result)
 
         # ── Save to CSV ──
         self._save_results(result)
 
         return result, str(annotated_path)
+
+    def _generate_report(self, result: Dict[str, Any], annotated_path: Path,
+                        seg_result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Stage 11: build the structured professional report (Phase 10).
+
+        Returns the structured report dict (files are written only when
+        ``analyze_full`` requests it), or None if reporting is unavailable.
+        """
+        if getattr(self, "report_generator", None) is None:
+            return None
+        try:
+            overlay_path = seg_result.get("overlay_path")
+            return self.report_generator.build_report(
+                result, detection_image=str(annotated_path),
+                segmentation_overlay=overlay_path)
+        except Exception:  # noqa: BLE001 — reporting is best-effort
+            return None
+
+    def analyze_full(
+        self, image_path: str, write_report: bool = False,
+        report_formats: Tuple[str, ...] = ("json",),
+    ) -> Dict[str, Any]:
+        """
+        Run the complete end-to-end pipeline and return one structured response
+        containing every prediction plus the professional report.
+
+        Pipeline: detection → segmentation → species → breed → body-measurement
+        extraction → weight → BCS → scientific database lookup → report.
+
+        Args:
+            image_path: Path to the input image.
+            write_report: Also render the report to disk (JSON/PDF).
+            report_formats: Formats to write when ``write_report`` is True.
+
+        Returns:
+            The full result dict (all predictions, taxonomy, scientific
+            profile, measurements, report, and image paths). ``report_paths``
+            is added when ``write_report`` is True.
+        """
+        result, annotated_path = self.analyze(image_path)
+        if write_report and getattr(self, "report_generator", None) is not None:
+            rendered = self.report_generator.generate(
+                result, formats=report_formats,
+                detection_image=annotated_path,
+                segmentation_overlay=result.get("segmentation", {}).get("overlay_path"))
+            result["report"] = rendered["report"]
+            result["report_paths"] = rendered["paths"]
+        return result
 
     # Alias for backward compatibility with app.py
     def infer(self, image_path: str) -> Tuple[Dict[str, Any], str]:
@@ -689,23 +756,19 @@ class CattleAnalysisPipeline:
         }
 
     def _estimate_bcs(self, features: Dict, roi: np.ndarray) -> Dict[str, Any]:
-        """Stage 8: Body Condition Score estimation."""
-        feature_cols = [
-            'area', 'perimeter', 'bbox_length', 'bbox_width', 'aspect_ratio',
-            'solidity', 'extent', 'equivalent_diameter', 'compactness',
-            'convex_area', 'major_axis_length', 'minor_axis_length',
-        ]
-        feat_vector = np.array([[features.get(k, 0) for k in feature_cols]])
-        
-        if self.has_bcs:
+        """Stage 8: Body Condition Score estimation (BCSRegressor + uncertainty)."""
+        if self.has_bcs and self.bcs_regressor is not None \
+                and self.bcs_regressor.feature_names:
             try:
-                prediction = self.bcs_regressor.predict(feat_vector)
-                bcs = float(prediction[0])
-                bcs = round(max(1.0, min(5.0, bcs)) * 2) / 2  # Round to 0.5
+                feat_vector = np.array([[features.get(k, 0.0)
+                                         for k in self.bcs_regressor.feature_names]])
+                result = self.bcs_regressor.predict_with_uncertainty(feat_vector)
                 return {
-                    "bcs": bcs,
-                    "confidence": 70.0,
+                    "bcs": result["bcs"],
+                    "confidence": result["confidence"],
+                    "uncertainty": result["uncertainty"],
                     "method": "ml_regressor",
+                    "model": result["model"],
                 }
             except Exception:
                 pass
@@ -869,6 +932,7 @@ class CattleAnalysisPipeline:
             "bcs": bcs_result["bcs"],
             "bcs_confidence": bcs_result["confidence"],
             "bcs_method": bcs_result["method"],
+            "bcs_uncertainty": bcs_result.get("uncertainty"),
             
             # ── Body Measurements (from segmentation mask) ──
             "measurements": {
