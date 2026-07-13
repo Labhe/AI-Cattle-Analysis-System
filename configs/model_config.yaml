@@ -73,16 +73,29 @@ detection:
 # ─── Segmentation Model ───
 segmentation:
   model_name: "yolo11m-seg"
+  model_family: "yolo11"            # Falls back to yolov8 if YOLO11 is unsupported
+  model_size: "m"                   # One of: n, s, m, l
   pretrained_weights: "yolo11m-seg.pt"
   fine_tuned_weights: "checkpoints/segmentor_best.pt"
+  last_checkpoint: "checkpoints/segmentor_last.pt"
   fallback_model: "unet_resnet34"
   fallback_weights: "checkpoints/unet_best.pth"
+  confidence_threshold: 0.4
+  iou_threshold: 0.5
   image_size: 640
+  classes:                          # Body-part classes for part-trained checkpoints
+    0: "animal"
+    1: "head"
+    2: "torso"
+    3: "legs"
+    4: "tail"
   training:
     epochs: 80
     patience: 15
     batch_size: 8
     lr: 0.001
+    workers: 4
+    seed: 42
 
 # ─── Species Classifier ───
 species_classifier:

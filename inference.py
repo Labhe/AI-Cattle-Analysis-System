@@ -30,7 +30,7 @@ from torchvision import transforms
 from ultralytics import YOLO
 
 # Internal modules
-from models.segmentation import UNetResNet34
+from models.segmentation import UNetResNet34, LivestockSegmentor
 from models.species_classifier import SpeciesClassifier, SPECIES_CLASSES
 from models.breed_classifier import (
     build_breed_classifier,
@@ -155,8 +155,10 @@ class CattleAnalysisPipeline:
         # Try YOLO-seg first
         yolo_seg_path = CHECKPOINTS_DIR / "segmentor_best.pt"
         if yolo_seg_path.exists():
-            print("  [✓] Loading YOLOv11-seg segmentor")
-            self.yolo_segmentor = YOLO(str(yolo_seg_path))
+            print("  [✓] Loading YOLO11-seg segmentor")
+            self.segmentor = LivestockSegmentor(
+                config=self.config, weights=yolo_seg_path, device=str(self.device)
+            )
             self.has_yolo_seg = True
         
         # Try U-Net fallback
@@ -298,7 +300,7 @@ class CattleAnalysisPipeline:
         result = self._compile_results(
             img_path, quality, det_result, species_result,
             breed_result, weight_result, bcs_result,
-            features, taxonomy, breed_info
+            features, taxonomy, breed_info, seg_result
         )
 
         # ── Save to CSV ──
@@ -454,12 +456,20 @@ class CattleAnalysisPipeline:
         # Try YOLO-seg
         if self.has_yolo_seg:
             try:
-                results = self.yolo_segmentor(roi, verbose=False)[0]
-                if results.masks is not None and len(results.masks) > 0:
-                    mask = results.masks[0].data[0].cpu().numpy()
-                    mask = (mask * 255).astype(np.uint8)
-                    mask = cv2.resize(mask, (roi.shape[1], roi.shape[0]))
-                    return {"mask": mask, "method": "yolo_seg"}
+                results = self.segmentor.predict(roi)
+                if results:
+                    best = results[0]
+                    parts = self.segmentor.predict_parts(results=results)
+                    return {
+                        "mask": best.binary_mask,
+                        "method": "yolo_seg",
+                        "confidence": best.confidence,
+                        "polygon": best.polygon.astype(float).tolist(),
+                        "parts": {
+                            name: part.binary_mask
+                            for name, part in parts.items() if part is not None
+                        },
+                    }
             except Exception:
                 pass
         
@@ -760,21 +770,29 @@ class CattleAnalysisPipeline:
     def _compile_results(
         self, img_path, quality, det, species_result,
         breed_result, weight_result, bcs_result,
-        features, taxonomy, breed_info,
+        features, taxonomy, breed_info, seg=None,
     ) -> Dict[str, Any]:
         """Compile all results into a single response dict."""
         top_breed = breed_result["top_breeds"][0] if breed_result["top_breeds"] else {"breed": "Unknown", "confidence": 0}
-        
+        seg = seg or {}
+
         result = {
             # ── Image Info ──
             "image": img_path.name,
             "image_quality": quality,
-            
+
             # ── Detection ──
             "detection": {
                 "box": det["box"],
                 "confidence": round(det["confidence"] * 100, 1),
                 "method": det["detection_method"],
+            },
+
+            # ── Segmentation ──
+            "segmentation": {
+                "method": seg.get("method", "none"),
+                "confidence": round(seg.get("confidence", 0.0) * 100, 1),
+                "parts": sorted(seg.get("parts", {}).keys()),
             },
             
             # ── Species ──
