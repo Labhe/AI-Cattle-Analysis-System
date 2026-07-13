@@ -176,6 +176,125 @@ def get_species_average_weight(species: str) -> float:
     return averages.get(species.lower(), 100.0)
 
 
+# Required scientific-profile fields (Phase 9). Every breed exposes all of
+# these via get_scientific_profile(), with missing values derived or defaulted.
+SCIENTIFIC_PROFILE_FIELDS = [
+    "scientific_name", "kingdom", "phylum", "class", "order", "family",
+    "genus", "species", "breed", "origin_country", "native_region", "purpose",
+    "average_weight_kg", "average_height_cm", "average_milk_yield_lpy",
+    "temperament", "climate_adaptation", "color_pattern", "lifespan_years",
+]
+
+
+def _range_average(range_dict: Optional[Dict[str, Any]]) -> Optional[float]:
+    """Mean of the midpoints of the male/female ranges in a {min,max} dict."""
+    if not isinstance(range_dict, dict):
+        return None
+    midpoints = []
+    for key in ("female", "male"):
+        rng = range_dict.get(key)
+        if isinstance(rng, (list, tuple)) and len(rng) == 2 and rng[1] > 0:
+            midpoints.append((rng[0] + rng[1]) / 2.0)
+    return round(sum(midpoints) / len(midpoints), 1) if midpoints else None
+
+
+def get_scientific_profile(breed_name: str) -> Optional[Dict[str, Any]]:
+    """
+    Return a normalized scientific profile for a breed with the full field set
+    required by the report/inference pipeline (Phase 9).
+
+    Every key in :data:`SCIENTIFIC_PROFILE_FIELDS` is present; unavailable
+    values are derived (genus/species from the binomial name, averages from
+    ranges) or set to a sensible default rather than omitted.
+
+    Args:
+        breed_name: Breed name or a known common name/alias.
+
+    Returns:
+        Profile dict, or None if the breed is unknown.
+    """
+    info = get_breed_info(breed_name)
+    if info is None:
+        return None
+
+    sci = info.get("scientific_name", "").strip()
+    parts = sci.split()
+    genus = info.get("genus") or (parts[0] if parts else "Unknown")
+    species = info.get("species") or (parts[1] if len(parts) > 1 else "sp.")
+
+    return {
+        "scientific_name": sci or "Unknown",
+        "kingdom": info.get("kingdom", "Animalia"),
+        "phylum": info.get("phylum", "Chordata"),
+        "class": info.get("class", "Mammalia"),
+        "order": info.get("order", "Artiodactyla"),
+        "family": info.get("family", "Bovidae"),
+        "genus": genus,
+        "species": species,
+        "breed": info.get("breed_name", breed_name),
+        "origin_country": info.get("origin_country", "Unknown"),
+        "native_region": info.get("origin_region", "Unknown"),
+        "purpose": info.get("purpose", "Unknown"),
+        "average_weight_kg": _range_average(info.get("weight_range_kg")),
+        "average_height_cm": _range_average(info.get("height_range_cm")),
+        "average_milk_yield_lpy": info.get("avg_milk_yield_liters_per_year"),
+        "temperament": info.get("temperament", "Unknown"),
+        "climate_adaptation": info.get("climate_adaptability", "Unknown"),
+        "color_pattern": info.get("coat_colors", []),
+        "lifespan_years": info.get("lifespan_years", []),
+        "animal_type": info.get("animal_type", "cattle"),
+        "description": info.get("description", ""),
+    }
+
+
+def search_breeds(query: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """
+    Case-insensitive substring search over breed names and their common names.
+
+    Args:
+        query: Search text.
+        limit: Maximum number of results.
+
+    Returns:
+        List of breed-info dicts (each with ``breed_name`` / ``animal_type``).
+    """
+    db = _load_database()
+    query = query.strip().lower()
+    if not query:
+        return []
+    results: List[Dict[str, Any]] = []
+    for animal_type, group in (("cattle", "cattle_breeds"), ("buffalo", "buffalo_breeds")):
+        for name, data in db.get(group, {}).items():
+            haystack = [name.lower()] + [c.lower() for c in data.get("common_names", [])]
+            if any(query in h for h in haystack):
+                results.append({**data, "breed_name": name, "animal_type": animal_type})
+                if len(results) >= limit:
+                    return results
+    return results
+
+
+def get_full_taxonomy(species: str) -> Dict[str, str]:
+    """
+    Return the complete 8-rank taxonomy for a species, always populated.
+
+    Falls back to the standard Bovidae/Chordata lineage when the species is
+    unknown, so downstream consumers never receive missing ranks.
+    """
+    taxonomy = get_species_taxonomy(species) or {}
+    sci = taxonomy.get("scientific_name", "").strip()
+    parts = sci.split()
+    return {
+        "kingdom": taxonomy.get("kingdom", "Animalia"),
+        "phylum": taxonomy.get("phylum", "Chordata"),
+        "class": taxonomy.get("class", "Mammalia"),
+        "order": taxonomy.get("order", "Artiodactyla"),
+        "family": taxonomy.get("family", "Bovidae"),
+        "genus": taxonomy.get("genus") or (parts[0] if parts else "Unknown"),
+        "species": taxonomy.get("species") or (parts[1] if len(parts) > 1 else "sp."),
+        "scientific_name": sci or "Unknown",
+    }
+
+
 def format_breed_report(breed_name: str) -> Optional[Dict[str, Any]]:
     """
     Format a complete breed report suitable for the frontend display.
