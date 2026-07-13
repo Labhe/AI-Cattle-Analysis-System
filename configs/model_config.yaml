@@ -1,0 +1,195 @@
+# AI Cattle Analysis System — Master Configuration
+# All model hyperparameters, paths, and thresholds are centralized here.
+
+project:
+  name: "AI Cattle Analysis System"
+  version: "2.0.0"
+
+paths:
+  data_dir: "data"
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  checkpoints_dir: "checkpoints"
+  outputs_dir: "outputs"
+  runs_dir: "runs"
+  logs_dir: "logs"
+
+# ─── Species & Class Definitions ───
+species:
+  livestock_classes:
+    0: "cattle"
+    1: "buffalo"
+    2: "horse"
+    3: "sheep"
+    4: "goat"
+    5: "pig"
+  species_classifier_classes:
+    0: "Cow"
+    1: "Bull"
+    2: "Buffalo"
+    3: "Yak"
+    4: "Ox"
+    5: "Goat"
+    6: "Sheep"
+    7: "Horse"
+    8: "Camel"
+    9: "Dog"
+    10: "Cat"
+    11: "Human"
+
+# ─── Detection Model ───
+detection:
+  model_name: "yolo11m"             # Options: yolo11m, yolo11l, rtdetr-l
+  pretrained_weights: "yolo11m.pt"
+  fine_tuned_weights: "checkpoints/detector_best.pt"
+  confidence_threshold: 0.4
+  iou_threshold: 0.5
+  image_size: 640
+  training:
+    epochs: 100
+    patience: 15
+    batch_size: 16
+    optimizer: "AdamW"
+    lr: 0.001
+    weight_decay: 0.0001
+    label_smoothing: 0.1
+    mosaic: true
+    mixup: 0.1
+    copy_paste: 0.1
+    hsv_h: 0.015
+    hsv_s: 0.7
+    hsv_v: 0.4
+    degrees: 10
+    translate: 0.1
+    scale: 0.5
+    perspective: 0.0005
+    multi_scale: true
+
+# ─── Segmentation Model ───
+segmentation:
+  model_name: "yolo11m-seg"
+  pretrained_weights: "yolo11m-seg.pt"
+  fine_tuned_weights: "checkpoints/segmentor_best.pt"
+  fallback_model: "unet_resnet34"
+  fallback_weights: "checkpoints/unet_best.pth"
+  image_size: 640
+  training:
+    epochs: 80
+    patience: 15
+    batch_size: 8
+    lr: 0.001
+
+# ─── Species Classifier ───
+species_classifier:
+  model_name: "efficientnet_v2_s"
+  weights: "checkpoints/species_classifier_best.pth"
+  image_size: 224
+  num_classes: 12
+  training:
+    epochs: 50
+    patience: 10
+    batch_size: 32
+    lr: 0.001
+    weight_decay: 0.0001
+    label_smoothing: 0.1
+    dropout: 0.3
+
+# ─── Breed Classifier ───
+breed_classifier:
+  model_name: "convnext_tiny"       # Options: efficientnet_v2_s, convnext_tiny, swin_t
+  weights: "checkpoints/breed_classifier_best.pth"
+  image_size: 224
+  num_classes: 20                    # Number of cattle breeds
+  top_k: 5
+  training:
+    epochs: 60
+    patience: 10
+    batch_size: 32
+    lr: 0.0005
+    weight_decay: 0.00005
+    label_smoothing: 0.1
+    dropout: 0.4
+    architectures_to_compare:
+      - "efficientnet_v2_s"
+      - "convnext_tiny"
+      - "swin_t"
+
+# ─── Weight Regressor ───
+weight_regressor:
+  model_type: "xgboost"             # Best performer selected automatically
+  weights: "checkpoints/weight_regressor_best.pkl"
+  input_features: 20                # Morphometric features
+  training:
+    regressors_to_compare:
+      - "xgboost"
+      - "catboost"
+      - "lightgbm"
+      - "random_forest"
+    cv_folds: 5
+    xgboost:
+      n_estimators: 200
+      max_depth: 8
+      learning_rate: 0.05
+    catboost:
+      iterations: 200
+      depth: 8
+      learning_rate: 0.05
+    lightgbm:
+      n_estimators: 200
+      max_depth: 8
+      learning_rate: 0.05
+
+# ─── BCS Regressor ───
+bcs_regressor:
+  cnn_model: "efficientnet_v2_s"
+  cnn_weights: "checkpoints/bcs_cnn_best.pth"
+  tree_model: "xgboost"
+  tree_weights: "checkpoints/bcs_tree_best.pkl"
+  scale: [1.0, 5.0]
+  step: 0.5
+  training:
+    cnn_epochs: 50
+    patience: 10
+    batch_size: 16
+    lr: 0.0005
+
+# ─── Image Quality ───
+image_quality:
+  min_resolution: 224
+  blur_threshold: 80.0
+  dark_threshold: 50
+  bright_threshold: 220
+  min_contrast: 20
+
+# ─── Inference Pipeline ───
+inference:
+  device: "auto"                     # auto, cuda, cpu
+  half_precision: false
+  batch_size: 1
+  confidence_display_threshold: 0.1
+  max_detections: 10
+
+# ─── Dataset Sources ───
+datasets:
+  sources:
+    - name: "cattle_detection_roboflow"
+      type: "roboflow"
+      url: "https://universe.roboflow.com/cattle-detection"
+      format: "yolo"
+      task: "detection"
+    - name: "cattle_breeds_kaggle"
+      type: "kaggle"
+      dataset_id: "yousefmohamed20/cattle-breeds"
+      format: "imagefolder"
+      task: "classification"
+    - name: "bcs_cattle_kaggle"
+      type: "kaggle"
+      dataset_id: "mondejar/bcs-cattle-dataset"
+      format: "csv"
+      task: "regression"
+    - name: "coco_cattle_subset"
+      type: "coco"
+      url: "https://cocodataset.org"
+      format: "coco_json"
+      task: "segmentation"
+      classes: ["cow", "horse", "sheep"]

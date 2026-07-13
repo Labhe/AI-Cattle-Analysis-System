@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual Environments
+venv/
+.venv/
+env/
+
+# Datasets
+data/
+datasets/
+
+# Training Outputs
+runs/
+logs/
+outputs/
+checkpoints/
+
+# Model Weights
+*.pt
+*.pth
+*.onnx
+*.engine
+*.ckpt
+
+# IDE
+.vscode/
+.idea/
+
+# Environment Variables
+.env
+
+# Cache
+.cache/

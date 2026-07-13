@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Cattle Analysis System — Livestock Intelligence Platform</title>
+    <meta name="description" content="Production-grade AI system for cattle breed identification, weight estimation, body condition scoring, and comprehensive livestock analysis.">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- Ambient background effects -->
+    <div class="ambient-bg">
+        <div class="gradient-orb orb-1"></div>
+        <div class="gradient-orb orb-2"></div>
+        <div class="gradient-orb orb-3"></div>
+    </div>
+
+    <div class="app-container">
+        <!-- ═══ HEADER ═══ -->
+        <header class="app-header" id="appHeader">
+            <div class="header-content">
+                <div class="logo-section">
+                    <div class="logo-icon">🐄</div>
+                    <div>
+                        <h1>AI Cattle Analysis</h1>
+                        <p class="subtitle">Livestock Intelligence Platform</p>
+                    </div>
+                </div>
+                <div class="header-badges">
+                    <span class="badge badge-ai">Deep Learning</span>
+                    <span class="badge badge-version">v2.0</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- ═══ MAIN CONTENT ═══ -->
+        <main class="main-content">
+            <!-- UPLOAD SECTION -->
+            <section class="upload-section glass-card" id="uploadSection">
+                <form id="uploadForm" enctype="multipart/form-data">
+                    <div class="drop-zone" id="dropZone">
+                        <div class="drop-zone-content">
+                            <div class="upload-icon-ring">
+                                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                    <polyline points="17 8 12 3 7 8"/>
+                                    <line x1="12" y1="3" x2="12" y2="15"/>
+                                </svg>
+                            </div>
+                            <h2>Upload Cattle Image</h2>
+                            <p>Drag & drop or click to browse — JPEG, PNG, WebP supported</p>
+                            <span class="file-hint">Maximum file size: 16MB</span>
+                        </div>
+                        <input type="file" id="imageInput" name="file" accept="image/png,image/jpeg,image/jpg,image/webp" hidden>
+                    </div>
+                    
+                    <!-- Preview -->
+                    <div class="upload-preview hidden" id="uploadPreview">
+                        <img id="previewImg" src="" alt="Preview">
+                        <div class="preview-info">
+                            <span class="preview-name" id="previewName">—</span>
+                            <button type="button" class="btn-icon" id="removeBtn" title="Remove image">✕</button>
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary" id="analyzeBtn" disabled>
+                        <span class="btn-text">Analyze Image</span>
+                        <span class="btn-icon-arrow">→</span>
+                    </button>
+                </form>
+
+                <!-- Loading Indicator -->
+                <div id="loader" class="loader hidden">
+                    <div class="loader-ring">
+                        <div class="ring-segment"></div>
+                        <div class="ring-segment"></div>
+                        <div class="ring-segment"></div>
+                    </div>
+                    <p class="loader-text">Running AI analysis pipeline...</p>
+                    <p class="loader-sub">Detection → Species → Breed → Weight → BCS</p>
+                </div>
+            </section>
+
+            <!-- ═══ RESULTS SECTION ═══ -->
+            <section class="results-section hidden" id="resultsSection">
+                
+                <!-- Image Quality Warning -->
+                <div class="quality-warning hidden" id="qualityWarning">
+                    <div class="warning-icon">⚠️</div>
+                    <div class="warning-content">
+                        <strong>Image Quality Notice</strong>
+                        <p id="qualityWarningText"></p>
+                    </div>
+                </div>
+
+                <!-- Results Grid -->
+                <div class="results-grid">
+                    
+                    <!-- LEFT: Image Preview -->
+                    <div class="result-images glass-card">
+                        <h3 class="section-title">
+                            <span class="title-icon">📸</span>
+                            Detection & Segmentation
+                        </h3>
+                        <div class="image-container">
+                            <img id="resultImage" src="" alt="Annotated analysis output">
+                        </div>
+                        <div class="detection-bar">
+                            <span>Detection Confidence</span>
+                            <div class="confidence-track">
+                                <div class="confidence-fill" id="detConfFill"></div>
+                            </div>
+                            <span class="confidence-value" id="detConfValue">—</span>
+                        </div>
+                    </div>
+
+                    <!-- RIGHT: Analysis Cards -->
+                    <div class="result-cards">
+                        
+                        <!-- Species & Confidence Card -->
+                        <div class="info-card glass-card card-species" id="cardSpecies">
+                            <div class="card-header">
+                                <span class="card-icon">🔬</span>
+                                <h3>Species Identification</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="species-main">
+                                    <span class="species-name" id="resSpecies">—</span>
+                                    <span class="species-confidence" id="resSpeciesConf">—</span>
+                                </div>
+                                <div class="species-scientific" id="resScientific">—</div>
+                            </div>
+                        </div>
+
+                        <!-- Breed Card -->
+                        <div class="info-card glass-card card-breed" id="cardBreed">
+                            <div class="card-header">
+                                <span class="card-icon">🧬</span>
+                                <h3>Breed Classification</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="breed-main">
+                                    <span class="breed-name" id="resBreed">—</span>
+                                    <span class="breed-confidence" id="resBreedConf">—</span>
+                                </div>
+                                <div class="breed-top5" id="breedTop5">
+                                    <!-- Filled by JS -->
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Weight Card -->
+                        <div class="info-card glass-card card-weight" id="cardWeight">
+                            <div class="card-header">
+                                <span class="card-icon">⚖️</span>
+                                <h3>Weight Estimation</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="weight-display">
+                                    <span class="weight-value" id="resWeight">—</span>
+                                    <span class="weight-unit">kg</span>
+                                </div>
+                                <div class="weight-range" id="resWeightRange">—</div>
+                                <div class="weight-method" id="resWeightMethod">—</div>
+                            </div>
+                        </div>
+
+                        <!-- BCS Card -->
+                        <div class="info-card glass-card card-bcs" id="cardBcs">
+                            <div class="card-header">
+                                <span class="card-icon">📊</span>
+                                <h3>Body Condition Score</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="bcs-display">
+                                    <div class="bcs-gauge">
+                                        <div class="bcs-scale">
+                                            <div class="bcs-marker" id="bcsMarker"></div>
+                                            <span class="bcs-label bcs-1">1</span>
+                                            <span class="bcs-label bcs-2">2</span>
+                                            <span class="bcs-label bcs-3">3</span>
+                                            <span class="bcs-label bcs-4">4</span>
+                                            <span class="bcs-label bcs-5">5</span>
+                                        </div>
+                                    </div>
+                                    <span class="bcs-value" id="resBcs">—</span>
+                                </div>
+                                <div class="bcs-description" id="resBcsDesc">—</div>
+                            </div>
+                        </div>
+
+                        <!-- Taxonomy Card -->
+                        <div class="info-card glass-card card-taxonomy" id="cardTaxonomy">
+                            <div class="card-header">
+                                <span class="card-icon">🌿</span>
+                                <h3>Scientific Classification</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="taxonomy-grid">
+                                    <div class="tax-row"><span class="tax-label">Kingdom</span><span class="tax-value" id="taxKingdom">—</span></div>
+                                    <div class="tax-row"><span class="tax-label">Phylum</span><span class="tax-value" id="taxPhylum">—</span></div>
+                                    <div class="tax-row"><span class="tax-label">Class</span><span class="tax-value" id="taxClass">—</span></div>
+                                    <div class="tax-row"><span class="tax-label">Order</span><span class="tax-value" id="taxOrder">—</span></div>
+                                    <div class="tax-row"><span class="tax-label">Family</span><span class="tax-value" id="taxFamily">—</span></div>
+                                    <div class="tax-row"><span class="tax-label">Species</span><span class="tax-value tax-species" id="taxSpecies">—</span></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Breed Info Card -->
+                        <div class="info-card glass-card card-breedinfo hidden" id="cardBreedInfo">
+                            <div class="card-header">
+                                <span class="card-icon">📋</span>
+                                <h3>Breed Information</h3>
+                            </div>
+                            <div class="card-body">
+                                <p class="breed-description" id="breedDescription">—</p>
+                                <div class="breed-details-grid" id="breedDetailsGrid">
+                                    <!-- Filled by JS -->
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Body Measurements Card -->
+                        <div class="info-card glass-card card-measurements" id="cardMeasurements">
+                            <div class="card-header">
+                                <span class="card-icon">📏</span>
+                                <h3>Body Measurements</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="measurements-grid" id="measurementsGrid">
+                                    <!-- Filled by JS -->
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="result-actions">
+                    <button class="btn btn-secondary" id="newAnalysisBtn">
+                        ← New Analysis
+                    </button>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="app-footer">
+            <p>AI Cattle Analysis System v2.0 — Built with PyTorch, YOLOv8, EfficientNetV2, ConvNeXt & Flask</p>
+        </footer>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>
