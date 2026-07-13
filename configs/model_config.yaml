@@ -243,6 +243,14 @@ inference:
   confidence_display_threshold: 0.1
   max_detections: 10
 
+# ─── Report Generator ───
+report:
+  output_dir: "outputs/reports"
+  organization: "AI Cattle Analysis System"
+  formats:
+    - "json"
+    - "pdf"
+
 # ─── Dataset Sources ───
 datasets:
   sources:
