@@ -51,6 +51,8 @@ from database import (
     get_breed_info,
     format_breed_report,
     get_species_average_weight,
+    get_scientific_profile,
+    get_full_taxonomy,
 )
 
 BASE_DIR = Path(__file__).parent
@@ -298,8 +300,11 @@ class CattleAnalysisPipeline:
         # ── Stage 9: Scientific Database Lookup ──
         taxonomy = get_species_taxonomy(species) or {}
         breed_info = None
+        self._scientific_profile = None
         if breed_result["top_breeds"]:
-            breed_info = format_breed_report(breed_result["top_breeds"][0]["breed"])
+            top_breed_name = breed_result["top_breeds"][0]["breed"]
+            breed_info = format_breed_report(top_breed_name)
+            self._scientific_profile = get_scientific_profile(top_breed_name)
 
         # ── Stage 10: Visualization ──
         annotated_path = self._visualize(
@@ -852,7 +857,8 @@ class CattleAnalysisPipeline:
             
             # ── Breed Details ──
             "breed_info": breed_info,
-            
+            "scientific_profile": getattr(self, "_scientific_profile", None),
+
             # ── Weight ──
             "weight_kg": weight_result["weight_kg"],
             "weight_confidence": weight_result["confidence"],
