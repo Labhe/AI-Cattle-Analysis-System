@@ -36,6 +36,7 @@ from models.breed_classifier import (
     build_breed_classifier,
     predict_breed_top_k,
     DEFAULT_BREED_CLASSES,
+    BreedPredictor,
 )
 from utils.feature_extraction import extract_features_from_mask
 from services.image_quality import assess_image_quality
@@ -197,17 +198,16 @@ class CattleAnalysisPipeline:
         self.has_breed_clf = False
         breed_path = CHECKPOINTS_DIR / "breed_classifier_best.pth"
         if breed_path.exists():
-            print("  [✓] Loading breed classifier")
-            arch = self.config.get("breed_classifier", {}).get("model_name", "convnext_tiny")
-            num_classes = self.config.get("breed_classifier", {}).get("num_classes", 20)
-            self.breed_clf = build_breed_classifier(
-                architecture=arch, num_classes=num_classes, pretrained=False
-            ).to(self.device)
-            self.breed_clf.load_state_dict(
-                torch.load(breed_path, map_location=self.device, weights_only=True)
-            )
-            self.breed_clf.eval()
-            self.has_breed_clf = True
+            try:
+                self.breed_predictor = BreedPredictor(
+                    config=self.config, weights=breed_path, device=str(self.device)
+                )
+                print("  [✓] Loading breed classifier "
+                      f"({self.breed_predictor.architecture}, "
+                      f"{len(self.breed_predictor.class_names)} breeds)")
+                self.has_breed_clf = True
+            except (RuntimeError, ValueError, FileNotFoundError) as e:
+                print(f"  [!] Failed to load breed classifier: {e}")
         else:
             print("  [!] No breed classifier found — using knowledge-based estimation")
 
@@ -500,18 +500,30 @@ class CattleAnalysisPipeline:
         return {"mask": mask, "method": "bbox_ellipse"}
 
     def _classify_breed(self, roi: np.ndarray, species: str) -> Dict[str, Any]:
-        """Stage 5: Breed classification."""
+        """Stage 5: Breed classification (after detection, segmentation, species)."""
         if self.has_breed_clf and roi.size > 0:
-            roi_tensor = self.transform(roi).unsqueeze(0).to(self.device)
-            top_breeds = predict_breed_top_k(
-                self.breed_clf, roi_tensor, k=5,
-                class_names=DEFAULT_BREED_CLASSES,
-            )
-            return {
-                "top_breeds": top_breeds,
-                "method": "classifier",
-            }
-        
+            try:
+                result = self.breed_predictor.predict_for_species(roi, species)
+            except (ValueError, RuntimeError) as e:
+                print(f"  Breed classification failed: {e}")
+                result = None
+
+            if result is not None and not result.get("supported", False):
+                # Unsupported species: report why instead of forcing a breed.
+                return {
+                    "top_breeds": [{"breed": "Not applicable", "confidence": 0.0}],
+                    "method": "unsupported_species",
+                    "message": result["message"],
+                }
+            if result is not None:
+                return {
+                    "top_breeds": [
+                        {"breed": name, "confidence": round(conf * 100, 1)}
+                        for name, conf in result["top_k"]
+                    ],
+                    "method": "classifier",
+                }
+
         # Knowledge-based fallback (better than random but not ML)
         return self._knowledge_breed_estimation(roi, species)
 
@@ -825,6 +837,7 @@ class CattleAnalysisPipeline:
             "breed_confidence": top_breed["confidence"],
             "breed_top_5": breed_result["top_breeds"],
             "breed_method": breed_result["method"],
+            "breed_message": breed_result.get("message"),
             
             # ── Breed Details ──
             "breed_info": breed_info,
